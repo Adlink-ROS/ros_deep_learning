@@ -1,7 +1,7 @@
 <launch>
 
 	<!-- VIDEO SOURCE -->
-	<arg name="input" default="csi://0"/>
+	<arg name="input" default="v4l2:///dev/video0"/>
 	<arg name="input_width" default="0"/>
 	<arg name="input_height" default="0"/>
 	<arg name="input_codec" default="unknown"/>

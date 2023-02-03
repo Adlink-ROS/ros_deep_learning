@@ -7,6 +7,7 @@ find_package(jetson-utils REQUIRED)
 find_package(jetson-inference REQUIRED)
 
 find_package(CUDA REQUIRED)
+find_package(OpenCV REQUIRED)
 
 # detect ROS1 vs ROS2
 find_package(catkin QUIET)
@@ -29,15 +30,17 @@ if( catkin_FOUND )
 		sensor_msgs
 		vision_msgs
 		std_msgs
+		cv_bridge
+		cam_lidar_calib
 	)
 	 
 	catkin_package(
 	    LIBRARIES ros_deep_learning_nodelets
-	    CATKIN_DEPENDS nodelet roscpp image_transport sensor_msgs
+	    CATKIN_DEPENDS nodelet roscpp image_transport sensor_msgs cam_lidar_calib
 	)
 
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")	# enable c++11 (TensorRT requirement)
-	include_directories(${catkin_INCLUDE_DIRS} ${CUDA_INCLUDE_DIRS})
+	include_directories(${catkin_INCLUDE_DIRS} ${CUDA_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 	add_definitions(-DROS1 -DROS_DISTRO=${ROS_DISTRO})
 
 else()
@@ -70,7 +73,7 @@ add_executable(imagenet src/node_imagenet.cpp ${common_src})
 target_link_libraries(imagenet ${catkin_LIBRARIES} jetson-inference)
 
 add_executable(detectnet src/node_detectnet.cpp ${common_src})
-target_link_libraries(detectnet ${catkin_LIBRARIES} jetson-inference)
+target_link_libraries(detectnet ${catkin_LIBRARIES} jetson-inference ${OpenCV_LIBS})
 
 add_executable(segnet src/node_segnet.cpp ${common_src})
 target_link_libraries(segnet ${catkin_LIBRARIES} jetson-inference)

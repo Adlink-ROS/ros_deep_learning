@@ -25,8 +25,15 @@
 
 #include <jetson-inference/detectNet.h>
 
+#include <opencv2/highgui/highgui.hpp>
+#include <cv_bridge/cv_bridge.h>
+
 #include <unordered_map>
 
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <cam_lidar_calib/ImageDepth.h>
 
 // globals
 detectNet* net = NULL;
@@ -41,6 +48,105 @@ Publisher<vision_msgs::VisionInfo> info_pub = NULL;
 
 vision_msgs::VisionInfo info_msg;
 
+// filter image and depth info
+typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, cam_lidar_calib::ImageDepth> SyncPolicy;
+std::shared_ptr< message_filters::Subscriber<sensor_msgs::Image> > image_sub;
+std::shared_ptr< message_filters::Subscriber<cam_lidar_calib::ImageDepth> > depth_sub;
+std::shared_ptr< message_filters::Synchronizer<SyncPolicy> > filter;
+
+std::string label_str[] = {
+"unlabeled",
+"person",
+"bicycle",
+"car",
+"motorcycle",
+"airplane",
+"bus",
+"train",
+"truck",
+"boat",
+"traffic light",
+"fire hydrant",
+"street sign",
+"stop sign",
+"parking meter",
+"bench",
+"bird",
+"cat",
+"dog",
+"horse",
+"sheep",
+"cow",
+"elephant",
+"bear",
+"zebra",
+"giraffe",
+"hat",
+"backpack",
+"umbrella",
+"shoe",
+"eye glasses",
+"handbag",
+"tie",
+"suitcase",
+"frisbee",
+"skis",
+"snowboard",
+"sports ball",
+"kite",
+"baseball bat ",
+"baseball glove",
+"skateboard",
+"surfboard",
+"tennis racket",
+"bottle",
+"plate",
+"wine glass",
+"cup",
+"fork",
+"knife",
+"spoon",
+"bowl",
+"banana",
+"apple",
+"sandwich",
+"orange",
+"broccoli",
+"carrot",
+"hot dog ",
+"pizza",
+"donut",
+"cake",
+"chair",
+"couch",
+"potted plant",
+"bed",
+"mirror",
+"dining table",
+"window",
+"desk",
+"toilet",
+"door",
+"tv",
+"laptop",
+"mouse",
+"remote",
+"keyboard",
+"cell phone",
+"microwave",
+"oven",
+"toaster",
+"sink",
+"refrigerator",
+"blender",
+"book",
+"clock",
+"vase",
+"scissors",
+"teddy bear",
+"hair drier",
+"toothbrush"
+};
 
 // triggered when a new subscriber connected
 void info_callback()
@@ -68,20 +174,113 @@ bool publish_overlay( detectNet::Detection* detections, int numDetections )
 		return false;
 	}
 
-	// populate the message
-	sensor_msgs::Image msg;
-
-	if( !overlay_cvt->Convert(msg, imageConverter::ROSOutputFormat) )
+	// convert to ros image msg format
+	sensor_msgs::Image ros_image_in;
+	if( !overlay_cvt->Convert(ros_image_in, imageConverter::ROSOutputFormat) )
 		return false;
 
-	// populate timestamp in header field
-	msg.header.stamp = ROS_TIME_NOW();
+	// store the timestamp in header field
+	ros_image_in.header.stamp = ROS_TIME_NOW();
 
+	// convert to opencv msg format in order to draw something on it
+	sensor_msgs::ImagePtr ros_image_ptr;
+    cv::Mat cv_image_in = cv_bridge::toCvShare(ros_image_in, ros_image_ptr, "bgr8")->image;
+    
+    for (auto i = 0; i < numDetections; ++i) {
+	    cv::Point2d position(detections[i].Left+(detections[i].Right-detections[i].Left)/2, 
+	                        detections[i].Top+(detections[i].Bottom-detections[i].Top)/2);
+	    // cv::circle(cv_image_in, position, 10, cv::Scalar(255, 255, 255), -1);
+	    cv::putText(cv_image_in, 
+	                "Hello, OpenCV!",
+	                position,
+	                cv::FONT_HERSHEY_DUPLEX,
+	                1.0, 
+	                CV_RGB(255, 255, 255), 
+	                1);
+	}
+
+	// convert back to ros image msg format
+    sensor_msgs::ImagePtr ros_image_out_ptr = cv_bridge::CvImage(std_msgs::Header(), "bgr8", cv_image_in).toImageMsg();
+                
 	// publish the message	
-	overlay_pub->publish(msg);
+	overlay_pub->publish(ros_image_out_ptr);
 	ROS_DEBUG("publishing %ux%u overlay image", width, height);
 }
 
+float getDepthByPoint(cv::Point2d point, const cam_lidar_calib::ImageDepthConstPtr &depth_msg)
+{
+	const float tolerance = 0.025;
+	
+	for (auto i = 0; i < depth_msg->size; ++i) {
+        auto x = abs(point.x - depth_msg->data[i].x) / point.x;
+        auto y = abs(point.y - depth_msg->data[i].y) / point.y;
+        if (x < tolerance && y < tolerance) {
+            return depth_msg->data[i].z;
+		}
+    }
+    return -1.0; // not found
+}
+
+bool publish_overlay_with_depth( detectNet::Detection* detections, int numDetections, const cam_lidar_calib::ImageDepthConstPtr &depth_msg)
+{
+	// get the image dimensions
+	const uint32_t width  = input_cvt->GetWidth();
+	const uint32_t height = input_cvt->GetHeight();
+
+	// assure correct image size
+	if( !overlay_cvt->Resize(width, height, imageConverter::ROSOutputFormat) )
+		return false;
+
+	// generate the overlay
+	if( !net->Overlay(input_cvt->ImageGPU(), overlay_cvt->ImageGPU(), width, height, 
+				   imageConverter::InternalFormat, detections, numDetections, overlay_flags) )
+	{
+		return false;
+	}
+
+	// convert to ros image msg format
+	sensor_msgs::Image ros_image_in;
+	if( !overlay_cvt->Convert(ros_image_in, imageConverter::ROSOutputFormat) )
+		return false;
+
+	// store the timestamp in header field
+	ros_image_in.header.stamp = ROS_TIME_NOW();
+
+	// convert to opencv msg format in order to draw something on it
+	sensor_msgs::ImagePtr ros_image_ptr;
+    cv::Mat cv_image_in = cv_bridge::toCvShare(ros_image_in, ros_image_ptr, "bgr8")->image;
+    
+    for (auto i = 0; i < numDetections; ++i) {
+	    cv::Point2d label_pos(detections[i].Left, detections[i].Top + 20);
+	    cv::Point2d center(detections[i].Left+(detections[i].Right-detections[i].Left)/2, 
+	                        detections[i].Top+(detections[i].Bottom-detections[i].Top)/2);
+	    float depth = getDepthByPoint(center, depth_msg);
+	    if (depth < 0) continue;
+	    
+	    std::string object_str = label_str[detections->ClassID];
+	    std::stringstream stream;
+	    stream.precision(2);
+        stream << std::fixed << depth;
+        std::string depth_str = stream.str();
+        stream.str(""); // clear
+        stream << std::fixed << detections->Confidence*100;
+        std::string confidence_str = stream.str();
+	    cv::putText(cv_image_in, 
+	                object_str + ": " + confidence_str + "%, distance: " + depth_str + "m",
+	                label_pos,
+	                cv::FONT_HERSHEY_COMPLEX,
+	                1.0, 
+	                CV_RGB(255, 255, 255), 
+	                1);
+	}
+
+	// convert back to ros image msg format
+    sensor_msgs::ImagePtr ros_image_out_ptr = cv_bridge::CvImage(std_msgs::Header(), "bgr8", cv_image_in).toImageMsg();
+                
+	// publish the message	
+	overlay_pub->publish(ros_image_out_ptr);
+	ROS_DEBUG("publishing %ux%u overlay image", width, height);
+}
 
 // input image subscriber callback
 void img_callback( const sensor_msgs::ImageConstPtr input )
@@ -161,6 +360,32 @@ void img_callback( const sensor_msgs::ImageConstPtr input )
 		publish_overlay(detections, numDetections);
 }
 
+void img_depth_callback(const sensor_msgs::ImageConstPtr &image_msg,
+						const cam_lidar_calib::ImageDepthConstPtr &depth_msg)
+{	
+	// convert the image to reside on GPU
+	if( !input_cvt || !input_cvt->Convert(image_msg) )
+	{
+		ROS_INFO("failed to convert %ux%u %s image", image_msg->width, image_msg->height, image_msg->encoding.c_str());
+		return;	
+	}
+
+	// classify the image
+	detectNet::Detection* detections = NULL;
+
+	const int numDetections = net->Detect(input_cvt->ImageGPU(), input_cvt->GetWidth(), input_cvt->GetHeight(), &detections, detectNet::OVERLAY_NONE);
+
+	// verify success	
+	if( numDetections < 0 )
+	{
+		ROS_ERROR("failed to run object detection on %ux%u image", image_msg->width, image_msg->height);
+		return;
+	}
+
+	// generate the overlay (if there are subscribers)
+	if( ROS_NUM_SUBSCRIBERS(overlay_pub) > 0 )
+		publish_overlay_with_depth(detections, numDetections, depth_msg);
+}
 
 // node main loop
 int main(int argc, char **argv)
@@ -173,6 +398,8 @@ int main(int argc, char **argv)
 	/*
 	 * retrieve parameters
 	 */	
+ 	std::string camera_name  = "port_0";
+
 	std::string model_name  = "ssd-mobilenet-v2";
 	std::string model_path;
 	std::string prototxt_path;
@@ -186,6 +413,7 @@ int main(int argc, char **argv)
 	float mean_pixel = 0.0f;
 	float threshold  = DETECTNET_DEFAULT_THRESHOLD;
 
+	ROS_DECLARE_PARAMETER("camera_name", camera_name);
 	ROS_DECLARE_PARAMETER("model_name", model_name);
 	ROS_DECLARE_PARAMETER("model_path", model_path);
 	ROS_DECLARE_PARAMETER("prototxt_path", prototxt_path);
@@ -201,7 +429,7 @@ int main(int argc, char **argv)
 	/*
 	 * retrieve parameters
 	 */
-	ROS_GET_PARAMETER("model_name", model_name);
+	ROS_GET_PARAMETER("camera_name", camera_name);
 	ROS_GET_PARAMETER("model_path", model_path);
 	ROS_GET_PARAMETER("prototxt_path", prototxt_path);
 	ROS_GET_PARAMETER("class_labels_path", class_labels_path);
@@ -306,9 +534,20 @@ int main(int argc, char **argv)
 	/*
 	 * subscribe to image topic
 	 */
+#if 0
 	auto img_sub = ROS_CREATE_SUBSCRIBER(sensor_msgs::Image, "image_in", 5, img_callback);
+#else
+	/*
+	 * message filter for image and depth info
+	 */
+	std::string camera_in_topic = "/" + camera_name + "/camera/image_raw";
+	std::string depthOutTopic = camera_in_topic + "/image_depth";
+    image_sub.reset(new message_filters::Subscriber<sensor_msgs::Image>(nh, camera_in_topic, 1));
+	depth_sub.reset(new message_filters::Subscriber<cam_lidar_calib::ImageDepth>(nh, depthOutTopic, 1));
+	filter.reset(new message_filters::Synchronizer<SyncPolicy>(SyncPolicy(10), *image_sub, *depth_sub));
+    filter->registerCallback(boost::bind(&img_depth_callback, _1, _2));
+#endif
 
-	
 	/*
 	 * wait for messages
 	 */
