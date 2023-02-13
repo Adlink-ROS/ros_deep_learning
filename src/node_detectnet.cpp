@@ -255,23 +255,44 @@ bool publish_overlay_with_depth( detectNet::Detection* detections, int numDetect
 	    cv::Point2d center(detections[i].Left+(detections[i].Right-detections[i].Left)/2, 
 	                        detections[i].Top+(detections[i].Bottom-detections[i].Top)/2);
 	    float depth = getDepthByPoint(center, depth_msg);
-	    if (depth < 0) continue;
-	    
-	    std::string object_str = label_str[detections->ClassID];
-	    std::stringstream stream;
-	    stream.precision(2);
-        stream << std::fixed << depth;
-        std::string depth_str = stream.str();
-        stream.str(""); // clear
-        stream << std::fixed << detections->Confidence*100;
-        std::string confidence_str = stream.str();
-	    cv::putText(cv_image_in, 
-	                object_str + ": " + confidence_str + "%, distance: " + depth_str + "m",
-	                label_pos,
-	                cv::FONT_HERSHEY_COMPLEX,
-	                1.0, 
-	                CV_RGB(255, 255, 255), 
-	                1);
+	    if (depth >= 0) {
+		    std::string object_str = label_str[detections->ClassID];
+		    std::stringstream stream;
+		    stream.precision(2);
+	        stream << std::fixed << depth;
+	        std::string depth_str = stream.str();
+	        stream.str(""); // clear
+	        stream << std::fixed << detections->Confidence*100;
+	        std::string confidence_str = stream.str();
+		    cv::putText(cv_image_in, 
+		                object_str + ": " + confidence_str + "%",
+		                label_pos,
+		                cv::FONT_HERSHEY_COMPLEX,
+		                3.0, 
+		                CV_RGB(255, 255, 255), 
+		                3);
+		    label_pos.y = label_pos.y + 90;
+		    cv::putText(cv_image_in, 
+		                "distance: " + depth_str + "m",
+		                label_pos,
+		                cv::FONT_HERSHEY_COMPLEX,
+		                3.0, 
+		                CV_RGB(255, 255, 255), 
+		                3);
+		} else {
+		    std::string object_str = label_str[detections->ClassID];
+		    std::stringstream stream;
+		    stream.precision(2);
+	        stream << std::fixed << detections->Confidence*100;
+	        std::string confidence_str = stream.str();
+		    cv::putText(cv_image_in, 
+		                object_str + ": " + confidence_str + "%",
+		                label_pos,
+		                cv::FONT_HERSHEY_COMPLEX,
+		                4.0, 
+		                CV_RGB(255, 255, 255), 
+		                3);
+		}
 	}
 
 	// convert back to ros image msg format
@@ -373,7 +394,7 @@ void img_depth_callback(const sensor_msgs::ImageConstPtr &image_msg,
 	// classify the image
 	detectNet::Detection* detections = NULL;
 
-	const int numDetections = net->Detect(input_cvt->ImageGPU(), input_cvt->GetWidth(), input_cvt->GetHeight(), &detections, detectNet::OVERLAY_NONE);
+	const int numDetections = net->Detect(input_cvt->ImageGPU(), input_cvt->GetWidth(), input_cvt->GetHeight(), &detections, detectNet::OVERLAY_LINES);
 
 	// verify success	
 	if( numDetections < 0 )
