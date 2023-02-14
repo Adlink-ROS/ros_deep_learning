@@ -289,7 +289,7 @@ bool publish_overlay_with_depth( detectNet::Detection* detections, int numDetect
 		                object_str + ": " + confidence_str + "%",
 		                label_pos,
 		                cv::FONT_HERSHEY_COMPLEX,
-		                4.0, 
+		                3.0, 
 		                CV_RGB(255, 255, 255), 
 		                3);
 		}
